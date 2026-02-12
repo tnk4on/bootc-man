@@ -1,0 +1,185 @@
+# =============================================================================
+# CI Workflow — Runs on every push/PR
+# =============================================================================
+# Test Levels (CI vs E2E):
+#
+#   CI (this file) — automatic, fast, no VM infrastructure required
+#   ├── lint            Static analysis (golangci-lint)
+#   ├── test-unit       Pure unit tests (no external dependencies)
+#   ├── integration     Podman-dependent tests (Linux only)
+#   ├── build           Binary compilation (Linux + macOS)
+#   └── rpm-build       RPM packaging verification
+#
+#   E2E (e2e.yml) — manual trigger, full infrastructure required
+#   ├── verify-kvm      Infrastructure check (KVM/QEMU/OVMF)
+#   └── e2e-full        Full E2E (Podman + QEMU + KVM + gvproxy + SSH)
+#
+# Note: macOS integration tests are NOT run on GitHub Actions because
+# Podman Machine requires nested virtualization, which is unavailable
+# on GitHub-hosted macOS runners (virtualized environment).
+# =============================================================================
+
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  # ============================================================
+  # Static Analysis
+  # ============================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  # ============================================================
+  # Unit Tests — pure Go tests, no external dependencies
+  # ============================================================
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run unit tests
+        run: go test -v -short -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+        continue-on-error: true
+
+  # ============================================================
+  # Build — verify compilation on Linux and macOS
+  # ============================================================
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build
+        run: make build
+
+      - name: Verify binary
+        run: |
+          ./bin/bootc-man version
+          ./bin/bootc-man --help
+
+  # ============================================================
+  # Integration Tests — requires Podman (Linux only)
+  # macOS is excluded: GitHub-hosted macOS runners cannot run
+  # Podman Machine (no nested virtualization support).
+  # ============================================================
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Podman
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Verify Podman installation
+        run: podman version
+
+      - name: Run integration tests
+        run: go test -v -race -tags=integration ./...
+
+  # ============================================================
+  # RPM Build — verify RPM packaging on Fedora
+  # ============================================================
+  rpm-build:
+    name: RPM Build Test
+    runs-on: ubuntu-latest
+    needs: [lint, test-unit]
+    container: fedora:43
+    steps:
+      - name: Install dependencies
+        run: dnf install -y golang git-core rpm-build rpmdevtools make
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trust repository directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Setup rpmbuild tree
+        run: rpmdev-setuptree
+
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '^Version:' rpm/bootc-man.spec | awk '{print $2}')
+          git archive --format=tar.gz --prefix=bootc-man-${VERSION}/ HEAD \
+            > ~/rpmbuild/SOURCES/bootc-man-${VERSION}.tar.gz
+
+      - name: Copy spec file
+        run: cp rpm/bootc-man.spec ~/rpmbuild/SPECS/
+
+      - name: Build RPM
+        run: rpmbuild -bb ~/rpmbuild/SPECS/bootc-man.spec
+
+      - name: Install RPM
+        run: |
+          dnf install -y ~/rpmbuild/RPMS/x86_64/bootc-man-*.x86_64.rpm || \
+          dnf install -y ~/rpmbuild/RPMS/aarch64/bootc-man-*.aarch64.rpm
+
+      - name: Verify installation
+        run: |
+          bootc-man version
+          bootc-man --help
+          rpm -ql bootc-man
+          test -f /usr/share/bash-completion/completions/bootc-man
+          test -f /usr/share/zsh/site-functions/_bootc-man
+          test -f /usr/share/fish/vendor_completions.d/bootc-man.fish

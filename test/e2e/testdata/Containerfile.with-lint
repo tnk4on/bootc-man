@@ -1,0 +1,10 @@
+# Containerfile with bootc container lint for E2E testing
+FROM quay.io/fedora/fedora-bootc:43
+
+LABEL containers.bootc=1
+
+# Validate bootc image structure
+RUN bootc container lint
+
+# Simple test marker
+RUN echo "e2e-test-with-lint" > /etc/e2e-test

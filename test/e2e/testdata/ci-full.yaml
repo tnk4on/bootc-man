@@ -1,0 +1,56 @@
+# Full CI pipeline for E2E testing (all stages)
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: e2e-full-test
+  description: "E2E test pipeline with all stages enabled"
+
+spec:
+  source:
+    containerfile: ./Containerfile
+    context: .
+
+  validate:
+    containerfileLint:
+      enabled: true
+      requireBootcLint: false
+      failIfMissing: false
+
+  build:
+    imageTag: host.containers.internal:5000/e2e-full-test:latest
+    labels:
+      org.opencontainers.image.title: "e2e-full-test"
+      org.opencontainers.image.description: "E2E full test image"
+
+  scan:
+    vulnerability:
+      enabled: true
+      tool: trivy
+      severity: HIGH,CRITICAL
+      failOnVulnerability: false
+
+    sbom:
+      enabled: true
+      tool: syft
+      format: spdx-json
+
+  convert:
+    enabled: true
+    formats:
+      - type: raw
+
+  test:
+    boot:
+      enabled: true
+      timeout: 60
+      gui: false
+      checks:
+        - "sudo bootc status"
+        - "cat /etc/os-release"
+
+  release:
+    registry: host.containers.internal:5000
+    repository: e2e-full-test
+    tls: false
+    tags:
+      - "latest"

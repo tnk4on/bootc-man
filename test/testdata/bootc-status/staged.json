@@ -1,0 +1,45 @@
+{
+  "apiVersion": "org.containers.bootc/v1",
+  "kind": "BootcHost",
+  "metadata": {
+    "name": "host"
+  },
+  "spec": {
+    "image": {
+      "image": "quay.io/fedora/fedora-bootc:42",
+      "transport": "registry"
+    }
+  },
+  "status": {
+    "staged": {
+      "image": {
+        "image": {
+          "image": "quay.io/fedora/fedora-bootc:42",
+          "transport": "registry"
+        },
+        "version": "42.20240201.0",
+        "timestamp": "2024-02-01T00:00:00Z",
+        "imageDigest": "sha256:new123new456"
+      },
+      "cachedUpdate": null,
+      "incompatible": false,
+      "pinned": false
+    },
+    "booted": {
+      "image": {
+        "image": {
+          "image": "quay.io/fedora/fedora-bootc:41",
+          "transport": "registry"
+        },
+        "version": "41.20240101.0",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "imageDigest": "sha256:abc123def456"
+      },
+      "cachedUpdate": null,
+      "incompatible": false,
+      "pinned": false
+    },
+    "rollback": null,
+    "type": "bootcHost"
+  }
+}

@@ -1,0 +1,8 @@
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  description: Pipeline without name
+spec:
+  source:
+    containerfile: Containerfile
+    context: .

@@ -1,0 +1,20 @@
+# Minimal CI pipeline for E2E testing
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: e2e-minimal-test
+  description: "Minimal E2E test pipeline"
+
+spec:
+  source:
+    containerfile: ./Containerfile
+    context: .
+
+  validate:
+    containerfileLint:
+      enabled: true
+      requireBootcLint: false
+      failIfMissing: false
+
+  build:
+    imageTag: localhost:5000/e2e-minimal-test:latest

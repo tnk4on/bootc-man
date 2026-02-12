@@ -1,0 +1,7 @@
+# Minimal Containerfile for E2E testing
+FROM quay.io/fedora/fedora-bootc:43
+
+LABEL containers.bootc=1
+
+# Simple test marker
+RUN echo "e2e-test" > /etc/e2e-test

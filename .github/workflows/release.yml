@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: '1.24'
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests
+        run: make test-unit
+
+      - name: Build binaries
+        run: make build-all
+
+      - name: Create checksums
+        run: |
+          cd bin
+          sha256sum bootc-man-* > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            bin/bootc-man-linux-amd64
+            bin/bootc-man-linux-arm64
+            bin/bootc-man-darwin-arm64
+            bin/checksums.txt
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Update Homebrew Tap formula with new version and SHA256
+  homebrew:
+    name: Update Homebrew Tap
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Update Homebrew Formula
+        uses: mislav/bump-homebrew-formula-action@v3
+        continue-on-error: true
+        with:
+          formula-name: bootc-man
+          homebrew-tap: tnk4on/homebrew-bootc-man
+          tag-name: ${{ github.ref_name }}
+          download-url: https://github.com/tnk4on/bootc-man/archive/refs/tags/${{ github.ref_name }}.tar.gz
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # Build Homebrew bottle (pre-built binary) on macOS
+  bottle:
+    name: Build Homebrew Bottle
+    needs: homebrew
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger bottle workflow in Tap repo
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh workflow run bottle.yml \
+            --repo tnk4on/homebrew-bootc-man \
+            -f tag=${{ github.ref_name }}

@@ -1,0 +1,26 @@
+# Validate-focused CI pipeline for E2E testing
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: e2e-validate-test
+  description: "E2E test pipeline focused on validation stage"
+
+spec:
+  source:
+    containerfile: ./Containerfile
+    context: .
+
+  validate:
+    containerfileLint:
+      enabled: true
+      requireBootcLint: true
+      warnIfMissing: true
+      failIfMissing: false
+
+    # Config TOML validation disabled for this test
+    configToml:
+      enabled: false
+
+    # Secret detection disabled for this test
+    secretDetection:
+      enabled: false

@@ -1,0 +1,37 @@
+# Build output
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test output
+*.test
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Local config (keep example)
+# ~/.config/bootc-man/
+
+# Logs
+*.log
+
+# AI agent configs
+.agent/
+
+# Root binary (build artifact)
+/bootc-man

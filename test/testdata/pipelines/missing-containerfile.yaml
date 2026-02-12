@@ -1,0 +1,7 @@
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: missing-containerfile
+spec:
+  source:
+    context: .

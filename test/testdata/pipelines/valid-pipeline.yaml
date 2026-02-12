@@ -1,0 +1,14 @@
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: test-pipeline
+  description: Test pipeline for unit tests
+spec:
+  source:
+    containerfile: Containerfile
+    context: .
+  validate:
+    containerfileLint:
+      enabled: true
+  build:
+    imageTag: test-image:latest

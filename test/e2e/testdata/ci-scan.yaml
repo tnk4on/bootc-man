@@ -1,0 +1,27 @@
+# Scan-focused CI pipeline for E2E testing
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: e2e-scan-test
+  description: "E2E test pipeline focused on scan stage"
+
+spec:
+  source:
+    containerfile: ./Containerfile
+    context: .
+
+  build:
+    imageTag: localhost:5000/e2e-scan-test:latest
+
+  scan:
+    vulnerability:
+      enabled: true
+      tool: trivy
+      severity: HIGH,CRITICAL
+      failOnVulnerability: false
+      skipDbUpdate: false
+
+    sbom:
+      enabled: true
+      tool: syft
+      format: spdx-json

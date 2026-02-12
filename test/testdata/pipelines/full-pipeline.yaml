@@ -1,0 +1,67 @@
+apiVersion: bootc-man/v1
+kind: Pipeline
+metadata:
+  name: full-pipeline
+  description: Full pipeline with all stages
+spec:
+  source:
+    containerfile: Containerfile
+    context: .
+  baseImage:
+    ref: quay.io/fedora/fedora-bootc:43
+  validate:
+    containerfileLint:
+      enabled: true
+      requireBootcLint: true
+    configToml:
+      enabled: true
+      path: config.toml
+    secretDetection:
+      enabled: true
+      tool: gitleaks
+  build:
+    imageTag: localhost:5000/test:latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    args:
+      VERSION: "1.0.0"
+    labels:
+      maintainer: test@example.com
+  scan:
+    vulnerability:
+      enabled: true
+      tool: trivy
+      severity: HIGH,CRITICAL
+      failOnVulnerability: true
+    sbom:
+      enabled: true
+      tool: syft
+      format: spdx-json
+  convert:
+    enabled: true
+    formats:
+      - type: qcow2
+      - type: ami
+  test:
+    boot:
+      enabled: true
+      timeout: 300
+      checks:
+        - ssh-ready
+        - systemd-healthy
+    upgrade:
+      enabled: true
+      fromImage: quay.io/fedora/fedora-bootc:42
+    rollback:
+      enabled: true
+  release:
+    registry: localhost:5000
+    repository: myorg/myimage
+    tls: false
+    tags:
+      - latest
+      - v1.0.0
+    sign:
+      enabled: true
+      key: cosign.key

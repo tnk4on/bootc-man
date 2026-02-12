@@ -1,0 +1,8 @@
+apiVersion: bootc-man/v1
+kind: NotPipeline
+metadata:
+  name: invalid-pipeline
+spec:
+  source:
+    containerfile: Containerfile
+    context: .
