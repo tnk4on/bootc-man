@@ -132,10 +132,10 @@ func CompareVersions(a, b string) int {
 	for i := 0; i < 3; i++ {
 		var aNum, bNum int
 		if i < len(aParts) {
-			fmt.Sscanf(aParts[i], "%d", &aNum)
+			fmt.Sscanf(aParts[i], "%d", &aNum) //nolint:errcheck // non-numeric parts default to 0
 		}
 		if i < len(bParts) {
-			fmt.Sscanf(bParts[i], "%d", &bNum)
+			fmt.Sscanf(bParts[i], "%d", &bNum) //nolint:errcheck // non-numeric parts default to 0
 		}
 		if aNum < bNum {
 			return -1

@@ -183,3 +183,25 @@ jobs:
           test -f /usr/share/bash-completion/completions/bootc-man
           test -f /usr/share/zsh/site-functions/_bootc-man
           test -f /usr/share/fish/vendor_completions.d/bootc-man.fish
+
+  # ============================================================
+  # Homebrew Install — verify Homebrew packaging on macOS
+  # ============================================================
+  brew-install:
+    name: Homebrew Install Test
+    runs-on: macos-latest
+    needs: [lint, test-unit]
+    steps:
+      - name: Tap and install bootc-man
+        run: |
+          brew tap tnk4on/bootc-man
+          brew install bootc-man
+
+      - name: Verify installation
+        run: |
+          bootc-man version
+          bootc-man --help
+
+      - name: Verify completions
+        run: |
+          brew list bootc-man

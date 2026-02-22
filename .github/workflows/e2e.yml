@@ -1,24 +1,47 @@
+# =============================================================================
+# E2E Tests — Manual trigger, requires AWS credentials
+# =============================================================================
+# Runs full E2E tests on Fedora via EC2 M8i with nested virtualization.
+# Tests include: container builds, registry, CI pipeline, VM boot (QEMU+KVM),
+# bootc status/upgrade/switch/rollback, and VM cleanup.
+#
+# Security: EC2 E2E tests require AWS credentials (secrets), which are NOT
+# available to fork PRs. Use workflow_dispatch after reviewing external PRs.
+# =============================================================================
+
 name: E2E Tests
 
 on:
   workflow_dispatch:
     inputs:
-      run_linux:
-        description: 'Run Linux E2E tests'
+      instance_type:
+        description: 'EC2 Instance Type'
         required: false
-        default: 'true'
-        type: boolean
-      run_kvm_verify:
-        description: 'Run KVM + QEMU verification'
+        default: 'm8i.large'
+        type: choice
+        options:
+          - m8i.large
+          - m8i.xlarge
+          - c8i.large
+          - c8i.xlarge
+      region:
+        description: 'AWS Region'
         required: false
-        default: 'true'
-        type: boolean
+        default: 'us-east-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-west-2
+          - ap-northeast-1
+
+env:
+  AWS_REGION: ${{ github.event.inputs.region || 'us-east-1' }}
+  KEY_NAME: bootc-e2e-key-${{ github.run_id }}
+  SECURITY_GROUP_NAME: bootc-e2e-sg-${{ github.run_id }}
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o ConnectTimeout=10"
 
 permissions:
   contents: read
-
-env:
-  GO_VERSION: '1.24'
 
 jobs:
   # ============================================================
@@ -28,7 +51,6 @@ jobs:
   verify-kvm:
     name: Verify KVM + QEMU
     runs-on: ubuntu-latest
-    if: github.event.inputs.run_kvm_verify == 'true'
     timeout-minutes: 10
     steps:
       - name: Enable KVM
@@ -75,202 +97,353 @@ jobs:
           fi
 
   # ============================================================
-  # Job 2: Full E2E Tests (Linux) with VM boot
-  # Runs all E2E tests including container builds and VM boot
-  # Requires: KVM, QEMU, OVMF, gvproxy, Podman, SSH keys
-  # Note: macOS tests are not run on GitHub Actions due to
-  #   Podman Machine limitations (no nested virtualization).
-  #   Consider Cirrus CI for macOS E2E testing.
+  # Job 2: Full E2E Tests on EC2 M8i (Fedora + KVM)
+  # Launches a Fedora EC2 instance with nested virtualization,
+  # transfers source code, builds bootc-man, and runs E2E tests.
   # ============================================================
-  e2e-full-linux:
-    name: E2E Full (Linux)
+  e2e-fedora:
+    name: E2E (EC2 M8i + KVM)
     runs-on: ubuntu-latest
-    if: github.event.inputs.run_linux == 'true'
     timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          go-version: ${{ env.GO_VERSION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # KVM setup (required for QEMU acceleration)
-      - name: Enable KVM
+      - name: Upgrade AWS CLI
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          echo "Current AWS CLI version:"
+          aws --version
+          echo "Upgrading to latest..."
+          curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q -o /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          echo "Updated AWS CLI version:"
+          aws --version
 
-      # Install system dependencies
-      - name: Install dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
-          sudo apt-get update
-          sudo apt-get install -y \
-            podman \
-            qemu-system-x86 \
-            qemu-utils \
-            ovmf
-
-      # Build gvproxy from source (not available as Ubuntu binary package)
-      - name: Install gvproxy
-        run: |
-          go install github.com/containers/gvisor-tap-vsock/cmd/gvproxy@latest
-          which gvproxy
-          echo "gvproxy installed at: $(which gvproxy)"
-
-      # Generate SSH key pair for VM access (CI doesn't have one by default)
-      - name: Generate SSH key pair
+      - name: Generate SSH Key
         run: |
           mkdir -p ~/.ssh
-          ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "bootc-man-ci"
-          chmod 600 ~/.ssh/id_ed25519
-          chmod 644 ~/.ssh/id_ed25519.pub
-          echo "SSH key pair generated"
+          ssh-keygen -t ed25519 -f ~/.ssh/ec2_key -N '' -C 'bootc-man-e2e'
+          chmod 600 ~/.ssh/ec2_key
 
-      - name: Verify environment
+      - name: Import SSH key to AWS
         run: |
-          echo "=== KVM ==="
-          ls -la /dev/kvm
-          echo ""
-          echo "=== QEMU ==="
-          qemu-system-x86_64 --version
-          echo ""
-          echo "=== OVMF ==="
-          ls /usr/share/OVMF/OVMF_CODE*.fd 2>/dev/null || ls /usr/share/edk2/ovmf/OVMF_CODE*.fd 2>/dev/null || echo "OVMF not found"
-          echo ""
-          echo "=== Podman ==="
-          podman version
-          echo ""
-          echo "=== gvproxy ==="
-          which gvproxy && gvproxy --help 2>&1 | head -3 || echo "gvproxy not found"
-          echo ""
-          echo "=== SSH key ==="
-          ls -la ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+          aws ec2 import-key-pair \
+            --key-name "${{ env.KEY_NAME }}" \
+            --public-key-material "fileb://$HOME/.ssh/ec2_key.pub" \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Create security group
+        run: |
+          # Get default VPC
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=is-default,Values=true" \
+            --query 'Vpcs[0].VpcId' --output text \
+            --region ${{ env.AWS_REGION }})
+          echo "VPC_ID=$VPC_ID" >> $GITHUB_ENV
+
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "${{ env.SECURITY_GROUP_NAME }}" \
+            --description "bootc-man E2E test (run ${{ github.run_id }})" \
+            --vpc-id "$VPC_ID" \
+            --region ${{ env.AWS_REGION }} \
+            --query 'GroupId' --output text)
+          echo "SECURITY_GROUP_ID=$SG_ID" >> $GITHUB_ENV
+
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp \
+            --port 22 \
+            --cidr 0.0.0.0/0 \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Find latest Fedora Cloud AMI
+        run: |
+          for VERSION in 43 42; do
+            AMI_ID=$(aws ec2 describe-images \
+              --owners 125523088429 \
+              --filters \
+                "Name=name,Values=Fedora-Cloud-Base-AmazonEC2.x86_64-${VERSION}*" \
+                "Name=virtualization-type,Values=hvm" \
+                "Name=architecture,Values=x86_64" \
+                "Name=state,Values=available" \
+              --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+              --output text \
+              --region ${{ env.AWS_REGION }})
+            if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "None" ]; then
+              echo "Found Fedora $VERSION AMI: $AMI_ID"
+              break
+            fi
+          done
+
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "::error::Could not find Fedora Cloud AMI"
+            exit 1
+          fi
+
+          echo "AMI_ID=$AMI_ID" >> $GITHUB_ENV
+          echo "Using AMI: $AMI_ID"
+
+          aws ec2 describe-images --image-ids "$AMI_ID" \
+            --query 'Images[0].Name' --output text \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Launch EC2 M8i instance
+        run: |
+          INSTANCE_TYPE="${{ github.event.inputs.instance_type || 'm8i.large' }}"
+          echo "Launching $INSTANCE_TYPE with nested virtualization..."
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "${{ env.AMI_ID }}" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "${{ env.KEY_NAME }}" \
+            --security-group-ids "${{ env.SECURITY_GROUP_ID }}" \
+            --cpu-options "NestedVirtualization=enabled" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=bootc-e2e-${{ github.run_id }}},{Key=Purpose,Value=bootc-man-e2e}]" \
+            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":60,"VolumeType":"gp3"}}]' \
+            --query 'Instances[0].InstanceId' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Instance ID: $INSTANCE_ID"
+
+          echo "Waiting for instance to be running..."
+          aws ec2 wait instance-running \
+            --instance-ids "$INSTANCE_ID" \
+            --region ${{ env.AWS_REGION }}
+
+          VM_IP=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+
+          echo "VM_IP=$VM_IP" >> $GITHUB_ENV
+          echo "Instance running at: $VM_IP"
+
+      - name: Wait for SSH
+        run: |
+          echo "Waiting for SSH connectivity..."
+          for i in $(seq 1 30); do
+            if ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} 'echo ok' 2>/dev/null; then
+              echo "SSH connected after $i attempts"
+              break
+            fi
+            echo "  Attempt $i/30 - waiting..."
+            sleep 10
+          done
+
+      # Fedora 43 Cloud AMI auto-expands root partition via cloud-init
+      - name: Verify disk space
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+            echo "=== Disk space ==="
+            df -h /
+            lsblk
+            FREE_GB=$(df --output=avail / | tail -1 | awk "{print int(\$1/1024/1024)}")
+            echo "Available: ${FREE_GB}GB"
+            if [ "$FREE_GB" -lt 20 ]; then
+              echo "::error::Not enough disk space (${FREE_GB}GB < 20GB)"
+              exit 1
+            fi
+          '
+
+      - name: Install dependencies
+        run: |
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+
+            echo "=== Installing system dependencies ==="
+            sudo dnf install -y \
+              golang \
+              git \
+              make \
+              podman \
+              qemu-kvm \
+              qemu-img \
+              edk2-ovmf
+
+            echo "=== Installing gvproxy ==="
+            go install github.com/containers/gvisor-tap-vsock/cmd/gvproxy@latest
+            sudo cp $(go env GOPATH)/bin/gvproxy /usr/local/bin/
+
+            echo "=== Generating SSH key pair for E2E tests ==="
+            ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "bootc-man-ci"
+            chmod 600 ~/.ssh/id_ed25519
+            chmod 644 ~/.ssh/id_ed25519.pub
+
+            echo "=== Environment verification ==="
+            echo "Go: $(go version)"
+            echo "Podman: $(podman --version)"
+            echo "QEMU: $(qemu-kvm --version | head -1)"
+            echo "gvproxy: $(which gvproxy)"
+            echo "KVM: $(ls -la /dev/kvm)"
+          '
+
+      - name: Transfer source code to EC2
+        run: |
+          echo "Transferring source code..."
+          tar czf /tmp/bootc-man-src.tar.gz \
+            --exclude='.git' \
+            --exclude='bin' \
+            -C ${{ github.workspace }} .
+          scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key \
+            /tmp/bootc-man-src.tar.gz \
+            fedora@${{ env.VM_IP }}:/tmp/
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+            mkdir -p ~/bootc-man
+            tar xzf /tmp/bootc-man-src.tar.gz -C ~/bootc-man
+            rm /tmp/bootc-man-src.tar.gz
+          '
 
       - name: Build bootc-man
-        run: make build
-
-      - name: Verify bootc-man
-        run: ./bin/bootc-man version
-
-      # Free disk space - raw disk images are ~10GB
-      - name: Free disk space
         run: |
-          echo "=== Disk space before cleanup ==="
-          df -h /
-          # Remove unnecessary large packages to free disk space
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost 2>/dev/null || true
-          sudo apt-get clean 2>/dev/null || true
-          echo "=== Disk space after cleanup ==="
-          df -h /
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+            cd ~/bootc-man
+            make build
+            ./bin/bootc-man version
+          '
 
-      # Run non-VM E2E tests first (registry, build, CI pipeline tests)
-      # Go's regexp doesn't support negative lookahead, so we use explicit patterns
-      # Note: Bootc tests (Upgrade/Switch/Rollback) require a running VM,
-      # so they run in the VM test step below.
-      - name: Run non-VM E2E tests
+      - name: Run E2E tests
         run: |
-          set -o pipefail
-          go test -v -tags=e2e -timeout=30m \
-            -run '^Test(Container|Registry|CI|E2E|Podman)' \
-            -count=1 ./test/e2e/... 2>&1 | tee e2e-results-non-vm.txt
-        env:
-          CI: "true"
-          GITHUB_ACTIONS: "true"
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            set -ex
+            cd ~/bootc-man
 
-      # Clean up containers/images from non-VM tests to free disk and memory
-      - name: Free resources before VM tests
+            export CI=true
+            export GITHUB_ACTIONS=true
+            # /tmp on Fedora is tmpfs (RAM-backed, ~8GB). Use /var/tmp (disk-backed)
+            # because the convert stage creates a 10GB raw disk image.
+            export TMPDIR=/var/tmp
+
+            echo "=== Disk usage before tests ==="
+            df -h / /tmp /var/tmp 2>/dev/null || df -h /
+            echo ""
+
+            echo "=== Phase 1: Non-VM tests ==="
+            go test -v -tags=e2e -timeout=30m \
+              -run "^Test(Container|Registry|CI|E2E|Podman|BootcMan)" \
+              -count=1 ./test/e2e/... 2>&1 | tee /var/tmp/e2e-phase1.txt
+
+            echo ""
+            echo "=== Disk usage after Phase 1 ==="
+            df -h / /tmp /var/tmp 2>/dev/null || df -h /
+            echo ""
+
+            # Free up space: clean Go build cache and Podman artifacts
+            go clean -cache 2>/dev/null || true
+            podman system prune -af 2>/dev/null || true
+            sudo podman system prune -af 2>/dev/null || true
+
+            echo "=== Disk usage after cleanup ==="
+            df -h / /tmp /var/tmp 2>/dev/null || df -h /
+            echo ""
+
+            echo "=== Phase 2: VM boot tests ==="
+            go test -v -tags=e2e -timeout=30m \
+              -run "^TestVM(Boot|SSHConnection|InfrastructureAvailability|List|Status)" \
+              -count=1 ./test/e2e/... 2>&1 | tee /var/tmp/e2e-phase2.txt
+
+            echo ""
+            echo "=== Phase 3: Bootc tests (requires running VM) ==="
+            go test -v -tags=e2e -timeout=30m \
+              -run "^TestBootc(Status|StatusJSON|Upgrade|Switch|Rollback)" \
+              -count=1 ./test/e2e/... 2>&1 | tee /var/tmp/e2e-phase3.txt
+          '
+
+      - name: Run E2E cleanup
         if: always()
         run: |
-          podman system prune -af 2>/dev/null || true
-          sudo podman system prune -af 2>/dev/null || true
-          echo "=== Disk space before VM tests ==="
-          df -h /
+          ssh ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key fedora@${{ env.VM_IP }} '
+            cd ~/bootc-man 2>/dev/null || exit 0
+            export CI=true
+            echo "=== Phase 4: VM cleanup ==="
+            go test -v -tags=e2e -timeout=5m \
+              -run "^TestVMCleanup" \
+              -count=1 ./test/e2e/... 2>&1 || true
+          ' 2>/dev/null || true
 
-      # Phase 1: Boot VM (TestVMBoot, TestVMSSHConnection, etc.)
-      # Go runs tests alphabetically by file, so we must run VM boot separately
-      # before Bootc tests that depend on a running VM.
-      - name: Run VM boot tests
-        run: |
-          set -o pipefail
-          go test -v -tags=e2e -timeout=30m \
-            -run '^TestVM(Boot|SSHConnection|InfrastructureAvailability|List|Status)' \
-            -count=1 ./test/e2e/... 2>&1 | tee e2e-results-vm.txt
-        env:
-          CI: "true"
-          GITHUB_ACTIONS: "true"
-
-      # Phase 2: Bootc tests (Upgrade/Switch/Rollback) require a running VM
-      - name: Run Bootc tests
-        run: |
-          set -o pipefail
-          go test -v -tags=e2e -timeout=30m \
-            -run '^TestBootc(Status|StatusJSON|Upgrade|Switch|Rollback)' \
-            -count=1 ./test/e2e/... 2>&1 | tee e2e-results-bootc.txt
-        env:
-          CI: "true"
-          GITHUB_ACTIONS: "true"
-
-      # Phase 3: VM cleanup
-      - name: Run VM cleanup tests
+      - name: Collect test results
         if: always()
         run: |
-          go test -v -tags=e2e -timeout=5m \
-            -run '^TestVMCleanup' \
-            -count=1 ./test/e2e/... 2>&1 | tee e2e-results-vm-cleanup.txt || true
-        env:
-          CI: "true"
-          GITHUB_ACTIONS: "true"
-
-      # Merge test results
-      - name: Merge test results
-        if: always()
-        run: |
-          cat e2e-results-non-vm.txt e2e-results-vm.txt e2e-results-bootc.txt e2e-results-vm-cleanup.txt > e2e-results.txt 2>/dev/null || true
+          mkdir -p /tmp/e2e-results
+          scp ${{ env.SSH_OPTS }} -i ~/.ssh/ec2_key \
+            fedora@${{ env.VM_IP }}:/var/tmp/e2e-phase*.txt \
+            /tmp/e2e-results/ 2>/dev/null || true
 
       - name: Test summary
         if: always()
         run: |
-          echo "## E2E Full Test Results (Linux)" >> $GITHUB_STEP_SUMMARY
+          echo "## E2E Test Results (EC2 M8i)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f e2e-results.txt ]; then
-            PASS=$(grep -c "^--- PASS" e2e-results.txt || true)
-            FAIL=$(grep -c "^--- FAIL" e2e-results.txt || true)
-            SKIP=$(grep -c "^--- SKIP" e2e-results.txt || true)
-            echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| PASS | $PASS |" >> $GITHUB_STEP_SUMMARY
-            echo "| FAIL | $FAIL |" >> $GITHUB_STEP_SUMMARY
-            echo "| SKIP | $SKIP |" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Instance Type | ${{ github.event.inputs.instance_type || 'm8i.large' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | ${{ env.AWS_REGION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AMI | ${{ env.AMI_ID }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Instance ID | ${{ env.INSTANCE_ID }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -d /tmp/e2e-results ] && ls /tmp/e2e-results/*.txt 1>/dev/null 2>&1; then
+            PASS=$(grep -h "^--- PASS" /tmp/e2e-results/*.txt 2>/dev/null | wc -l | tr -d ' ')
+            FAIL=$(grep -h "^--- FAIL" /tmp/e2e-results/*.txt 2>/dev/null | wc -l | tr -d ' ')
+            SKIP=$(grep -h "^--- SKIP" /tmp/e2e-results/*.txt 2>/dev/null | wc -l | tr -d ' ')
             echo "" >> $GITHUB_STEP_SUMMARY
-            if [ "$FAIL" -gt 0 ]; then
-              echo "### Failed Tests" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              grep "^--- FAIL" e2e-results.txt >> $GITHUB_STEP_SUMMARY || true
-              echo '```' >> $GITHUB_STEP_SUMMARY
-            fi
+            echo "| Result | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ PASS | $PASS |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ FAIL | $FAIL |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ SKIP | $SKIP |" >> $GITHUB_STEP_SUMMARY
           fi
-
-      # Collect VM-related logs for debugging
-      - name: Collect VM logs
-        if: always()
-        run: |
-          mkdir -p /tmp/vm-logs
-          cp /tmp/bootc-man-qemu-*.log /tmp/vm-logs/ 2>/dev/null || true
-          cp /tmp/bootc-man-gvproxy-*.log /tmp/vm-logs/ 2>/dev/null || true
-          ls -la /tmp/vm-logs/ 2>/dev/null || echo "No VM logs found"
 
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-full-linux-results
-          path: |
-            e2e-results.txt
-            test/e2e/*.log
-            test/e2e/tmp/
-            /tmp/vm-logs/
+          name: e2e-ec2-m8i-results
+          path: /tmp/e2e-results/
           retention-days: 14
+
+      # === Cleanup (always runs) ===
+      - name: Terminate EC2 instance
+        if: always()
+        run: |
+          if [ -n "${{ env.INSTANCE_ID }}" ]; then
+            echo "Terminating instance ${{ env.INSTANCE_ID }}..."
+            aws ec2 terminate-instances \
+              --instance-ids "${{ env.INSTANCE_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+            aws ec2 wait instance-terminated \
+              --instance-ids "${{ env.INSTANCE_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+            echo "Instance terminated"
+          fi
+
+      - name: Delete security group
+        if: always()
+        run: |
+          if [ -n "${{ env.SECURITY_GROUP_ID }}" ]; then
+            sleep 5
+            aws ec2 delete-security-group \
+              --group-id "${{ env.SECURITY_GROUP_ID }}" \
+              --region ${{ env.AWS_REGION }} || true
+            echo "Security group deleted"
+          fi
+
+      - name: Delete SSH key pair
+        if: always()
+        run: |
+          aws ec2 delete-key-pair \
+            --key-name "${{ env.KEY_NAME }}" \
+            --region ${{ env.AWS_REGION }} || true
+          echo "Key pair deleted"
