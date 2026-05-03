@@ -91,7 +91,7 @@ func GetGvproxyVersion() string {
 		return ""
 	}
 	// Parse: "gvproxy version v0.8.7"
-	return extractSemver(strings.TrimSpace(string(output)))
+	return ExtractSemver(strings.TrimSpace(string(output)))
 }
 
 // GetVfkitVersion returns the installed vfkit version string (e.g. "v0.6.1").
@@ -103,12 +103,12 @@ func GetVfkitVersion() string {
 		return ""
 	}
 	// Parse: "vfkit version: v0.6.3" or "vfkit v0.6.3"
-	return extractSemver(strings.TrimSpace(string(output)))
+	return ExtractSemver(strings.TrimSpace(string(output)))
 }
 
-// extractSemver extracts a semantic version (vN.N.N) from a string.
+// ExtractSemver extracts a semantic version (vN.N.N) from a string.
 // Looks for a token starting with "v" followed by a digit (e.g. "v0.8.7").
-func extractSemver(s string) string {
+func ExtractSemver(s string) string {
 	for _, part := range strings.Fields(s) {
 		// Match "vN..." pattern (v followed by digit), not words like "version"
 		clean := strings.TrimSuffix(part, ",")

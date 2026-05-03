@@ -129,8 +129,9 @@ var keygenOutputDir string
 
 // Flags
 var (
-	ciStage    string
-	ciPipeline string // --pipeline flag for specifying pipeline file
+	ciStage     string
+	ciPipeline  string // --pipeline flag for specifying pipeline file
+	ciEphemeral bool   // --ephemeral flag for using bcvk ephemeral VM in test stage
 )
 
 // stageOrder defines the order of CI stages (references ci.StageOrder)
@@ -143,6 +144,7 @@ func init() {
 	// Add --pipeline flag to ci run command
 	ciRunCmd.Flags().StringVarP(&ciPipeline, "pipeline", "p", "", "Path to pipeline definition file (default: bootc-ci.yaml in current directory)")
 	ciRunCmd.Flags().StringVar(&ciStage, "stage", "", "Run specific stage(s) only (comma-separated: validate,build,scan,convert,test,release)")
+	ciRunCmd.Flags().BoolVar(&ciEphemeral, "ephemeral", false, "Use bcvk ephemeral VM for test stage (skips convert stage, boots directly from container image)")
 	// Note: --dry-run is a global flag inherited from rootCmd.PersistentFlags()
 
 	// Register completion function for --stage flag with comma-separated support
@@ -1304,6 +1306,21 @@ func runTestStage(ctx context.Context, pipeline *ci.Pipeline, imageTag string, d
 		}
 	}
 
+	if dryRun && ciEphemeral {
+		fmt.Println("🔍 [DRY-RUN] Would execute ephemeral test stage via bcvk:")
+		fmt.Printf("   Image: %s\n", imageTag)
+
+		checks := []string{"sudo bootc status"}
+		if pipeline.Spec.Test.Boot != nil && len(pipeline.Spec.Test.Boot.Checks) > 0 {
+			checks = pipeline.Spec.Test.Boot.Checks
+		}
+		fmt.Println("   Commands:")
+		for _, check := range checks {
+			fmt.Printf("      bcvk ephemeral run-ssh -K --execute \"%s\" %s\n", check, imageTag)
+		}
+		return nil
+	}
+
 	if dryRun {
 		fmt.Println("🔍 [DRY-RUN] Would execute test stage:")
 
@@ -1375,8 +1392,17 @@ func runTestStage(ctx context.Context, pipeline *ci.Pipeline, imageTag string, d
 	}
 
 	testStage := ci.NewTestStage(pipeline, imageTag, verbose)
-	if err := testStage.Execute(ctx); err != nil {
-		return err
+
+	if ciEphemeral {
+		fmt.Println("🚀 Using bcvk ephemeral VM (skipping disk image boot)")
+		fmt.Println()
+		if err := testStage.ExecuteEphemeral(ctx); err != nil {
+			return err
+		}
+	} else {
+		if err := testStage.Execute(ctx); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println()

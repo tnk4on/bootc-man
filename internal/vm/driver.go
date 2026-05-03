@@ -15,6 +15,8 @@ const (
 	VfkitVM VMType = iota
 	// QemuVM is the QEMU hypervisor for Linux
 	QemuVM
+	// KrunkitVM is the krunkit hypervisor for macOS (libkrun/HVF)
+	KrunkitVM
 	// HyperVVM is the Hyper-V hypervisor for Windows (future)
 	HyperVVM
 	// UnknownVM is an unknown hypervisor type
@@ -25,6 +27,8 @@ func (v VMType) String() string {
 	switch v {
 	case VfkitVM:
 		return config.BinaryVfkit
+	case KrunkitVM:
+		return config.BinaryKrunkit
 	case QemuVM:
 		return "qemu"
 	case HyperVVM:

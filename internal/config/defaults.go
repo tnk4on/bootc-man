@@ -210,6 +210,8 @@ const (
 	BinaryGvproxy = "gvproxy"
 	// BinaryVfkit is the name of the vfkit binary
 	BinaryVfkit = "vfkit"
+	// BinaryKrunkit is the name of the krunkit binary (libkrun/HVF backend)
+	BinaryKrunkit = "krunkit"
 	// BinaryPodman is the name of the podman binary
 	BinaryPodman = "podman"
 	// BinarySSH is the name of the ssh binary

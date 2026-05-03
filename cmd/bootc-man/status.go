@@ -249,6 +249,23 @@ func checkCITools(ctx context.Context, pm *podman.Client) []CIToolStatus {
 		}
 		tools = append(tools, vfkitStatus)
 
+		// krunkit
+		krunkitStatus := CIToolStatus{Name: config.BinaryKrunkit, Status: "not found"}
+		if _, err := exec.LookPath(config.BinaryKrunkit); err == nil {
+			krunkitStatus.Status = "installed"
+		}
+		tools = append(tools, krunkitStatus)
+
+		// bcvk
+		bcvkStatus := CIToolStatus{Name: "bcvk", Status: "not found"}
+		if path, err := exec.LookPath("bcvk"); err == nil {
+			bcvkStatus.Status = "installed"
+			if out, err := exec.Command(path, "--version").Output(); err == nil {
+				bcvkStatus.Version = config.ExtractSemver(strings.TrimSpace(string(out)))
+			}
+		}
+		tools = append(tools, bcvkStatus)
+
 		// gvproxy
 		gvproxyStatus := CIToolStatus{Name: config.BinaryGvproxy, Status: "not found"}
 		if err := ci.CheckGvproxyAvailable(); err == nil {
@@ -542,8 +559,10 @@ func outputCIToolsVerbose(tools []CIToolStatus) {
 	// Stage 5: Test
 	switch runtime.GOOS {
 	case "darwin":
-		fmt.Println("\n  Stage 5: Test (macOS - vfkit)")
+		fmt.Println("\n  Stage 5: Test (macOS - vfkit/krunkit)")
 		printToolVerbose(toolMap, config.BinaryVfkit)
+		printToolVerbose(toolMap, config.BinaryKrunkit)
+		printToolVerbose(toolMap, "bcvk")
 		printToolVerbose(toolMap, config.BinaryGvproxy)
 	case "linux":
 		fmt.Println("\n  Stage 5: Test (Linux - QEMU/KVM)")
