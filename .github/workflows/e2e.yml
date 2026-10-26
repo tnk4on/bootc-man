@@ -41,6 +41,7 @@ env:
   SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o ConnectTimeout=10"
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
@@ -112,8 +113,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::567297530339:role/github-actions-ec2
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Upgrade AWS CLI
